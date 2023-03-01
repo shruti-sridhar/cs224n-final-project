@@ -38,16 +38,30 @@ class BertSelfAttention(nn.Module):
     # each attention is calculated following eq (1) of https://arxiv.org/pdf/1706.03762.pdf
     # attention scores are calculated by multiply query and key 
     # and get back a score matrix S of [bs, num_attention_heads, seq_len, seq_len]
-    # S[*, i, j, k] represents the (unnormalized)attention score between the j-th and k-th token, given by i-th attention head
+    # S[*, i, j, k] represents the (unnormalized) attention score between the j-th and k-th token, given by i-th attention head
     # before normalizing the scores, use the attention mask to mask out the padding token scores
     # Note again: in the attention_mask non-padding tokens with 0 and padding tokens with a large negative number 
 
     # normalize the scores
     # multiply the attention scores to the value and get back V'
     # next, we need to concat multi-heads and recover the original shape [bs, seq_len, num_attention_heads * attention_head_size = hidden_size]
+  
+    # shape = [bs, num_attention_heads, seq_len, seq_len]
+    attn_scores = query @ key.transpose(-2, -1)
+    masked_scores = attn_scores + attention_mask
+    normalized_scores = F.softmax(masked_scores * (1 / math.sqrt(self.attention_head_size)), dim=1)
 
-    ### TODO
-    raise NotImplementedError
+    # shape = [bs, num_heads, seq_len, head_size]
+    attn_values = normalized_scores @ value
+
+    bs = attn_scores.size()[0]
+    seq_len = attn_scores.size()[2]
+    hidden_size = self.num_attention_heads * self.attention_head_size
+    
+    # concatenate all heads side by side: shape = [bs, seq_len, num_heads * head_size]
+    attn_output = attn_values.transpose(1, 2).contiguous().reshape(bs, seq_len, hidden_size) 
+    
+    return attn_output
 
 
   def forward(self, hidden_states, attention_mask):
@@ -96,7 +110,6 @@ class BertLayer(nn.Module):
     ### TODO
     raise NotImplementedError
 
-
   def forward(self, hidden_states, attention_mask):
     """
     hidden_states: either from the embedding layer (first bert layer) or from the previous bert layer
@@ -109,8 +122,6 @@ class BertLayer(nn.Module):
     """
     ### TODO
     raise NotImplementedError
-
-
 
 class BertModel(BertPreTrainedModel):
   """
