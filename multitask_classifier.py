@@ -44,15 +44,17 @@ class MultitaskBERT(nn.Module):
     def __init__(self, config):
         super(MultitaskBERT, self).__init__()
         # You will want to add layers here to perform the downstream tasks.
-        # Pretrain mode does not require updating bert paramters.
+        # Pretrain mode does not require updating bert parameters.
         self.bert = BertModel.from_pretrained('bert-base-uncased')
         for param in self.bert.parameters():
             if config.option == 'pretrain':
                 param.requires_grad = False
             elif config.option == 'finetune':
                 param.requires_grad = True
-        ### TODO
-        raise NotImplementedError
+        self.dropout = torch.nn.Dropout(p=config.hidden_dropout_prob)
+        self.sent_linear = torch.nn.Linear(BERT_HIDDEN_SIZE, N_SENTIMENT_CLASSES)
+        self.para_linear = torch.nn.Linear(BERT_HIDDEN_SIZE, 1)
+        self.sts_linear = torch.nn.Linear(BERT_HIDDEN_SIZE, 1)
 
 
     def forward(self, input_ids, attention_mask):
@@ -62,7 +64,16 @@ class MultitaskBERT(nn.Module):
         # When thinking of improvements, you can later try modifying this
         # (e.g., by adding other layers).
         ### TODO
-        raise NotImplementedError
+
+        embedding_output = self.bert.embed(input_ids=input_ids)
+        sequence_output = self.bert.encode(embedding_output, attention_mask=attention_mask)
+
+        # get cls token hidden state
+        first_tk = sequence_output[:, 0]
+        first_tk = self.bert.pooler_dense(first_tk)
+        first_tk = self.bert.pooler_af(first_tk)
+
+        return first_tk
 
 
     def predict_sentiment(self, input_ids, attention_mask):
@@ -72,7 +83,12 @@ class MultitaskBERT(nn.Module):
         Thus, your output should contain 5 logits for each sentence.
         '''
         ### TODO
-        raise NotImplementedError
+        
+        embedding = self.forward(input_ids, attention_mask)
+        embedding = self.dropout(embedding)
+        logits = self.sent_linear(embedding)
+        
+        return logits
 
 
     def predict_paraphrase(self,
@@ -83,7 +99,16 @@ class MultitaskBERT(nn.Module):
         during evaluation, and handled as a logit by the appropriate loss function.
         '''
         ### TODO
-        raise NotImplementedError
+        
+        embedding_1 = self.forward(input_ids_1, attention_mask_1)
+        embedding_1 = self.dropout(embedding_1)
+        embedding_2 = self.forward(input_ids_2, attention_mask_2)
+        embedding_2 = self.dropout(embedding_2)
+        cos = torch.nn.CosineSimilarity()
+        logit = cos(embedding_1, embedding_2)
+        
+        return logit
+
 
 
     def predict_similarity(self,
@@ -94,7 +119,16 @@ class MultitaskBERT(nn.Module):
         during evaluation, and handled as a logit by the appropriate loss function.
         '''
         ### TODO
-        raise NotImplementedError
+        
+        embedding_1 = self.forward(input_ids_1, attention_mask_1)
+        embedding_1 = self.dropout(embedding_1)
+        embedding_2 = self.forward(input_ids_2, attention_mask_2)
+        embedding_2 = self.dropout(embedding_2)
+        cos = torch.nn.CosineSimilarity()
+        logit = cos(embedding_1, embedding_2)
+        
+        return logit
+
 
 
 
