@@ -49,7 +49,8 @@ class BertSelfAttention(nn.Module):
     # shape = [bs, num_attention_heads, seq_len, seq_len]
     attn_scores = query @ key.transpose(-2, -1)
     masked_scores = attn_scores + attention_mask
-    normalized_scores = F.softmax(masked_scores * (1 / math.sqrt(self.attention_head_size)), dim=1)
+    normalized_scores = F.softmax(masked_scores * (1 / math.sqrt(self.attention_head_size)), dim=3)
+    normalized_scores = self.dropout(normalized_scores)
 
     # shape = [bs, num_heads, seq_len, head_size]
     attn_values = normalized_scores @ value
@@ -61,24 +62,25 @@ class BertSelfAttention(nn.Module):
     # concatenate all heads side by side: shape = [bs, seq_len, num_heads * head_size]
     attn_output = attn_values.transpose(1, 2).contiguous().reshape(bs, seq_len, hidden_size) 
 
-    sm = nn.Softmax(dim=3)
+    return attn_output
 
-    bs, _, seq_len = key.shape[:3]
-    key = key.transpose(2, 3)
-    S = query@key
+    # sm = nn.Softmax(dim=3)
 
-    S /= self.attention_head_size**0.5 #[bs, self.num_attention_heads, seq_len, seq_len)
-    S += attention_mask
-    S = sm(S)
-    S = self.dropout(S)
-    V = S@value #[bs, self.num_attention_heads, seq_len, self.attention_head_size)
-    V = V.transpose(1,2).contiguous()
+    # bs, _, seq_len = key.shape[:3]
+    # key = key.transpose(2, 3)
+    # S = query@key
 
-    output = V.view(bs,seq_len,self.all_head_size) #[bs, seq_len, self.num_attention_heads*self.attention_head_size=hidden)
+    # S /= self.attention_head_size**0.5 #[bs, self.num_attention_heads, seq_len, seq_len)
+    # S += attention_mask
+    # S = sm(S)
+    # S = self.dropout(S)
+    # V = S@value #[bs, self.num_attention_heads, seq_len, self.attention_head_size)
+    # V = V.transpose(1,2).contiguous()
 
-    return output
+    # output = V.view(bs,seq_len,self.all_head_size) #[bs, seq_len, self.num_attention_heads*self.attention_head_size=hidden)
 
-    return output
+
+    # return output
 
 
   def forward(self, hidden_states, attention_mask):
