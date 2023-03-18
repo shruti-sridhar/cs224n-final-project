@@ -28,7 +28,7 @@ from datasets import load_multitask_data, load_multitask_test_data, \
 
 TQDM_DISABLE = True
 
-# Evaluate a multitask model for accuracy.on SST only.
+# Evaluate a multitask model for accuracy on SST only.
 def model_eval_sst(dataloader, model, device):
     model.eval()  # switch to eval model, will turn off randomness like dropout
     y_true = []
@@ -56,6 +56,70 @@ def model_eval_sst(dataloader, model, device):
     acc = accuracy_score(y_true, y_pred)
 
     return acc, f1, y_pred, y_true, sents, sent_ids
+
+# Evaluate a multitask model for accuracy on paraphrase detection only.
+def model_eval_para(dataloader, model, device):
+    model.eval()  # switch to eval model, will turn off randomness like dropout
+    para_y_true = []
+    para_y_pred = []
+    para_sent_ids = []
+
+    # Evaluate paraphrase detection.
+    for step, batch in enumerate(tqdm(dataloader, desc=f'eval', disable=TQDM_DISABLE)):
+        (b_ids1, b_mask1,
+            b_ids2, b_mask2,
+            b_labels, b_sent_ids) = (batch['token_ids_1'], batch['attention_mask_1'],
+                          batch['token_ids_2'], batch['attention_mask_2'],
+                          batch['labels'], batch['sent_ids'])
+
+        b_ids1 = b_ids1.to(device)
+        b_mask1 = b_mask1.to(device)
+        b_ids2 = b_ids2.to(device)
+        b_mask2 = b_mask2.to(device)
+
+        logits = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
+        y_hat = logits.sigmoid().round().flatten().cpu().numpy()
+        b_labels = b_labels.flatten().cpu().numpy()
+
+        para_y_pred.extend(y_hat)
+        para_y_true.extend(b_labels)
+        para_sent_ids.extend(b_sent_ids)
+
+    paraphrase_accuracy = np.mean(np.array(para_y_pred) == np.array(para_y_true))
+
+    return paraphrase_accuracy
+
+# Evaluate a multitask model for accuracy on semantic textual similarity only.
+def model_eval_sts(dataloader, model, device):
+    model.eval()  # switch to eval model, will turn off randomness like dropout
+    sts_y_true = []
+    sts_y_pred = []
+    sts_sent_ids = []
+
+    for step, batch in enumerate(tqdm(sts_dataloader, desc=f'eval', disable=TQDM_DISABLE)):
+        (b_ids1, b_mask1,
+            b_ids2, b_mask2,
+            b_labels, b_sent_ids) = (batch['token_ids_1'], batch['attention_mask_1'],
+                          batch['token_ids_2'], batch['attention_mask_2'],
+                          batch['labels'], batch['sent_ids'])
+
+        b_ids1 = b_ids1.to(device)
+        b_mask1 = b_mask1.to(device)
+        b_ids2 = b_ids2.to(device)
+        b_mask2 = b_mask2.to(device)
+
+        logits = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
+        y_hat = logits.flatten().cpu().numpy()
+        b_labels = b_labels.flatten().cpu().numpy()
+
+        sts_y_pred.extend(y_hat)
+        sts_y_true.extend(b_labels)
+        sts_sent_ids.extend(b_sent_ids)
+    
+    pearson_mat = np.corrcoef(sts_y_pred,sts_y_true)
+    sts_corr = pearson_mat[1][0]
+
+    return sts_corr
 
 # Perform model evaluation in terms by averaging accuracies across tasks.
 def model_eval_multitask(sentiment_dataloader,
