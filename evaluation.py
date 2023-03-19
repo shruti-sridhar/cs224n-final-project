@@ -17,7 +17,7 @@ explicitly aside from model_eval_multitask.
 
 import torch
 from torch.utils.data import DataLoader
-from sklearn.metrics import classification_report, f1_score, recall_score, accuracy_score
+from sklearn.metrics import classification_report, f1_score, recall_score, accuracy_score, confusion_matrix
 from tqdm import tqdm
 import numpy as np
 
@@ -54,8 +54,9 @@ def model_eval_sst(dataloader, model, device):
 
     f1 = f1_score(y_true, y_pred, average='macro')
     acc = accuracy_score(y_true, y_pred)
+    confusion_matrix = confusion_matrix(y_true, y_pred)
 
-    return acc, f1, y_pred, y_true, sents, sent_ids
+    return acc, f1, y_pred, y_true, sents, sent_ids, confusion_matrix
 
 # Evaluate a multitask model for accuracy on paraphrase detection only.
 def model_eval_para(dataloader, model, device):
@@ -155,7 +156,7 @@ def model_eval_multitask(sentiment_dataloader,
             para_sent_ids.extend(b_sent_ids)
 
         paraphrase_accuracy = np.mean(np.array(para_y_pred) == np.array(para_y_true))
-
+        
         sts_y_true = []
         sts_y_pred = []
         sts_sent_ids = []

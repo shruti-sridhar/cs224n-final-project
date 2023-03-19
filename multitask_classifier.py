@@ -111,10 +111,11 @@ class MultitaskBERT(nn.Module):
         embedding_2 = self.forward(input_ids_2, attention_mask_2)
         embedding_2 = self.dropout(embedding_2)
 
-        if args.loss_type_para == "contrastive":
+        if args.loss_type_para == "cosine":
             embedding_1 = self.para_linear_dist(embedding_1)
             embedding_2 = self.para_linear_dist(embedding_2)
-            logit = (1 - F.cosine_similarity(embedding_1, embedding_2)).float() 
+            similarity = (F.cosine_similarity(embedding_1, embedding_2)).float()
+            logit = (similarity + 1) / 2 # scale to [0, 1] range
 
         if args.loss_type_para == "BCE":
             both_embeddings = torch.cat((embedding_1, embedding_2), dim=1)
@@ -169,9 +170,9 @@ def train_multitask(args):
     sst_train_data, num_labels, para_train_data, sts_train_data = load_multitask_data(args.sst_train,args.para_train,args.sts_train, split ='train')
     sst_dev_data, num_labels, para_dev_data, sts_dev_data = load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, split ='train')
 
-    sst_batch_size = 64
-    para_batch_size = 64
-    sts_batch_size = 64
+    sst_batch_size = 32
+    para_batch_size = 32
+    sts_batch_size = 32
 
     # 1. SENTIMENT CLASSIFICATION TRAIN/DEV DATA (SST)
     sst_train_data = SentenceClassificationDataset(sst_train_data, args)
@@ -241,9 +242,19 @@ def train_multitask(args):
         print("\nRunning Epoch {}...".format(epoch))
         print("===================")
 
-        for i, (batch_sst, batch_para, batch_sts) in enumerate(zip_longest(sst_train_dataloader, para_train_dataloader, sts_dev_dataloader)):
+        generator_sst = iter(sst_train_dataloader)
+        generator_para = iter(para_train_dataloader)
+        generator_sts = iter(sts_train_dataloader)
+
+        for i, (batch_sst, batch_para, batch_sts) in enumerate(zip_longest(sst_train_dataloader, para_train_dataloader, sts_train_dataloader)):
             
             # STEP 1. train on one batch from sentiment SST dataset
+            try:
+                batch_sst = next(generator_sst)
+            except StopIteration:
+                generator_sst = iter(sst_train_dataloader)
+                batch_sst = next(generator_sst)
+
             if batch_sst:
                 b_ids, b_mask, b_labels = (batch_sst['token_ids'],
                                            batch_sst['attention_mask'], batch_sst['labels'])
@@ -255,6 +266,7 @@ def train_multitask(args):
                 logits = model.predict_sentiment(b_ids, b_mask)
                 loss_sentiment = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / sst_batch_size
                 loss_sentiment = loss_sentiment.to(device)
+
 
             # STEP 2. train on one batch from paraphrase Quora dataset
             (b_ids1, b_mask1,
@@ -273,7 +285,7 @@ def train_multitask(args):
             logits = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
             logits = logits.type(torch.FloatTensor)
 
-            if args.loss_type_para == "contrastive":
+            if args.loss_type_para == "cosine":
                 # logits represent cosine distances: maximize/minimize distance based on true label
                 loss_paraphrase = 0.5 * (b_labels.float() * logits.pow(2) + (1 - b_labels).float() * F.relu(0.5 - logits).pow(2))
                 loss_paraphrase = loss_paraphrase.sum() / para_batch_size
@@ -286,6 +298,12 @@ def train_multitask(args):
             loss_paraphrase = loss_paraphrase.to(device) 
 
             # STEP 3. train on one batch from semantic textual similarity SemEval dataset
+            try:
+                batch_sts = next(generator_sts)
+            except StopIteration:
+                generator_sts = iter(sts_train_dataloader)
+                batch_sts = next(generator_sts)
+
             if batch_sts:
                 (b_ids1, b_mask1,
                  b_ids2, b_mask2,
@@ -312,17 +330,18 @@ def train_multitask(args):
             # STEP 4. backpropagate losses (with gradient surgery if applicable)
             optimizer.zero_grad()
             
-            if not batch_sst: loss_sentiment = 0
-            if not batch_sts: loss_similarity = 0
+            # if not batch_sst: loss_sentiment = 0
+            # if not batch_sts: loss_similarity = 0
             
             total_loss = (loss_sentiment + loss_paraphrase + loss_similarity).float()
             
-            if not batch_sst and not batch_sts:
-                losses = [loss_paraphrase.float()]
-            elif not batch_sts:
-                losses = [loss_sentiment.float(), loss_paraphrase.float()]
-            else:
-                losses = [loss_sentiment.float(), loss_paraphrase.float(), loss_similarity.float()]
+            # if not batch_sst and not batch_sts:
+            #     losses = [loss_paraphrase.float()]
+            # elif not batch_sts:
+            #     losses = [loss_sentiment.float(), loss_paraphrase.float()]
+            # else:
+            
+            losses = [loss_sentiment.float(), loss_paraphrase.float(), loss_similarity.float()]
 
             if args.use_grad_surgery:
                 optimizer.pc_backward(losses)
@@ -416,19 +435,18 @@ def get_args():
     parser.add_argument("--lr", type=float, help="learning rate, default lr for 'pretrain': 1e-3, 'finetune': 1e-5",
                         default=1e-5)
 
-    parser.add_argument("--loss_type_para", type=str, help="loss type for paraphrase detection (BCE or contrastive)",
-                        default="BCE")
-    parser.add_argument("--loss_type_sts", type=str, help="loss type for STS evaluation (MSE or cosine)",
-                        default="MSE")
-    parser.add_argument("--use_grad_surgery", type=bool, help="use gradient surgery while multi-task finetuning", default=True)
-    parser.add_argument("--load_saved_model", type=bool, help="load an existing model for further training", default=False)
+    # additional arguments
+    parser.add_argument("--loss_type_para", type=str, help="loss type for paraphrase detection (BCE or cosine)", default="BCE")
+    parser.add_argument("--loss_type_sts", type=str, help="loss type for STS evaluation (MSE or cosine)", default="MSE")
+    parser.add_argument("--use_grad_surgery", help="use gradient surgery while multi-task finetuning", action='store_true')
+    parser.add_argument("--load_saved_model", help="load an existing model for further training", action='store_true')
 
     args = parser.parse_args()
     return args
 
 if __name__ == "__main__":
     args = get_args()
-    grad_surgery = "surg" if args.use_grad_surgery else "nosurg"
+    grad_surgery = "surg" if args.use_grad_surgery else "no-surg"
     args.filepath = f'{args.option}-{args.epochs}-{args.lr}-{grad_surgery}-{args.loss_type_para}-{args.loss_type_sts}-multitask.pt' # save path
     seed_everything(args.seed)  # fix the seed for reproducibility
     train_multitask(args)
