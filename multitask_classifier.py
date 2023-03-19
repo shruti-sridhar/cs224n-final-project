@@ -63,7 +63,7 @@ class MultitaskBERT(nn.Module):
         self.dropout = torch.nn.Dropout(p=config.hidden_dropout_prob)
         self.sent_linear = torch.nn.Linear(BERT_HIDDEN_SIZE, N_SENTIMENT_CLASSES)
         self.para_linear_cat = torch.nn.Linear(BERT_HIDDEN_SIZE * 2, 1)
-        self.para_linear_dist = torch.nn.Linear(BERT_HIDDEN_SIZE, BERT_HIDDEN_SIZE)
+        self.para_linear_cosine = torch.nn.Linear(BERT_HIDDEN_SIZE, BERT_HIDDEN_SIZE)
         self.sts_linear = torch.nn.Linear(BERT_HIDDEN_SIZE, BERT_HIDDEN_SIZE)
 
     def forward(self, input_ids, attention_mask):
@@ -111,13 +111,12 @@ class MultitaskBERT(nn.Module):
         embedding_2 = self.forward(input_ids_2, attention_mask_2)
         embedding_2 = self.dropout(embedding_2)
 
-        if args.loss_type_para == "cosine":
-            embedding_1 = self.para_linear_dist(embedding_1)
-            embedding_2 = self.para_linear_dist(embedding_2)
-            similarity = (F.cosine_similarity(embedding_1, embedding_2)).float()
-            logit = (similarity + 1) / 2 # scale to [0, 1] range
+        if args.logit_type_para == "cosine":
+            embedding_1 = self.para_linear_cosine(embedding_1)
+            embedding_2 = self.para_linear_cosine(embedding_2)
+            logit = (F.cosine_similarity(embedding_1, embedding_2)).float()
 
-        if args.loss_type_para == "BCE":
+        if args.logit_type_para == "concat":
             both_embeddings = torch.cat((embedding_1, embedding_2), dim=1)
             logit = self.para_linear_cat(both_embeddings).squeeze()
 
@@ -285,12 +284,12 @@ def train_multitask(args):
             logits = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
             logits = logits.type(torch.FloatTensor)
 
-            if args.loss_type_para == "cosine":
-                # logits represent cosine distances: maximize/minimize distance based on true label
-                loss_paraphrase = 0.5 * (b_labels.float() * logits.pow(2) + (1 - b_labels).float() * F.relu(0.5 - logits).pow(2))
-                loss_paraphrase = loss_paraphrase.sum() / para_batch_size
+            if args.logit_type_para == "cosine":
+                # logits represent cosine similarities normalized to 0-1: compute BCE loss with true lables
+                logits = torch.sigmoid(logits)
+                loss_paraphrase = F.binary_cross_entropy(logits, b_labels.view(-1), reduction='sum') / para_batch_size
 
-            if args.loss_type_para == "BCE":
+            if args.logit_type_para == "concat":
                 # logits normalized to be probabilities from 0-1: compute BCE loss with true labels
                 logits = torch.sigmoid(logits)
                 loss_paraphrase = F.binary_cross_entropy(logits, b_labels.view(-1), reduction='sum') / para_batch_size
@@ -330,17 +329,7 @@ def train_multitask(args):
             # STEP 4. backpropagate losses (with gradient surgery if applicable)
             optimizer.zero_grad()
             
-            # if not batch_sst: loss_sentiment = 0
-            # if not batch_sts: loss_similarity = 0
-            
             total_loss = (loss_sentiment + loss_paraphrase + loss_similarity).float()
-            
-            # if not batch_sst and not batch_sts:
-            #     losses = [loss_paraphrase.float()]
-            # elif not batch_sts:
-            #     losses = [loss_sentiment.float(), loss_paraphrase.float()]
-            # else:
-            
             losses = [loss_sentiment.float(), loss_paraphrase.float(), loss_similarity.float()]
 
             if args.use_grad_surgery:
@@ -436,7 +425,7 @@ def get_args():
                         default=1e-5)
 
     # additional arguments
-    parser.add_argument("--loss_type_para", type=str, help="loss type for paraphrase detection (BCE or cosine)", default="BCE")
+    parser.add_argument("--logit_type_para", type=str, help="loss type for paraphrase detection (concat or cosine)", default="concat")
     parser.add_argument("--loss_type_sts", type=str, help="loss type for STS evaluation (MSE or cosine)", default="MSE")
     parser.add_argument("--use_grad_surgery", help="use gradient surgery while multi-task finetuning", action='store_true')
     parser.add_argument("--load_saved_model", help="load an existing model for further training", action='store_true')
@@ -447,7 +436,7 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     grad_surgery = "surg" if args.use_grad_surgery else "no-surg"
-    args.filepath = f'{args.option}-{args.epochs}-{args.lr}-{grad_surgery}-{args.loss_type_para}-{args.loss_type_sts}-multitask.pt' # save path
+    args.filepath = f'{args.option}-{args.epochs}-{args.lr}-{grad_surgery}-{args.logit_type_para}-{args.loss_type_sts}-multitask.pt' # save path
     seed_everything(args.seed)  # fix the seed for reproducibility
     train_multitask(args)
     test_model(args)
